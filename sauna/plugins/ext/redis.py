@@ -17,6 +17,30 @@ class Redis(Plugin):
             raise DependencyError(self.__class__.__name__, 'redis-py',
                                   'redis', 'python3-redis')
         self._redis_info = None
+        try:
+            from redis import sentinel
+            self._sentinel = sentinel
+        except ImportError:
+            self._sentinel = None
+
+    @property
+    def sentinel(self):
+        if not self._sentinel:
+            from ... import DependencyError
+            raise DependencyError(self.__class__.__name__, 'redis-py',
+                                  'sentinel', 'python3-redis')
+
+    def _get_client(self):
+        if "sentinels" in self.config:
+            # use sentinel
+            master_name = self.config.pop("master_name", "")
+            # we may want to use master to check its availability
+            use_master = self.config.pop("use_master", False)
+            sentinel_instance = self.sentinel.Sentinel(**self.config)
+            if use_master:
+                return sentinel_instance.master_for(master_name)
+            return sentinel_instance.slave_for(master_name)
+        return self.redis.StrictRedis(**self.config)
 
     @my_plugin.check()
     def used_memory(self, check_config):
@@ -39,13 +63,13 @@ class Redis(Plugin):
     @property
     def redis_info(self):
         if not self._redis_info:
-            r = self.redis.StrictRedis(**self.config)
+            r = self._get_client()
             self._redis_info = r.info()
         return self._redis_info
 
     @my_plugin.check()
     def llen(self, check_config):
-        r = self.redis.StrictRedis(**self.config)
+        r = self._get_client()
         num_items = r.llen(check_config['key'])
         status = self._value_to_status_less(num_items, check_config)
         output = '{} items in key {}'.format(num_items, check_config['key'])
